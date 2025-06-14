@@ -1,25 +1,28 @@
 package com.android.social.media.social.mediaa.ndroid.test.data
 
 import android.graphics.Bitmap
+import android.util.Log
 import com.android.social.media.social.mediaa.ndroid.test.domain.repository.ImageDownloader
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
 import io.reactivex.rxjava3.core.Observable
+import io.reactivex.rxjava3.core.Single
 import io.reactivex.rxjava3.disposables.CompositeDisposable
+import io.reactivex.rxjava3.exceptions.CompositeException
 import io.reactivex.rxjava3.schedulers.Schedulers
-import kotlin.system.measureNanoTime
+
+sealed class DownloadResult {
+    data class Success(val bitmap: Bitmap) : DownloadResult()
+    object Failed : DownloadResult()
+}
+
+data class ProcessingResult(val bitmap: Bitmap?, val originalX: Int)
 
 class RxJavaImageProcessor : ImageDownloader {
 
-    // CompositeDisposable для управління всіма підписками та їх скасування
     private val disposables = CompositeDisposable()
 
-    // Кількість частин, на які буде ділитися зображення для обробки
     private val NUM_PROCESSING_PARTS = Runtime.getRuntime().availableProcessors()
 
-    /**
-     * Паралельно завантажує список зображень, використовуючи OkHttp та RxJava Schedulers.io().
-     * Кожне завантаження виконується на окремому потоці з пулу IO.
-     */
     override fun downloadImages(
         imageUrls: List<String>,
         onProgress: (Int, Bitmap?) -> Unit,
@@ -27,70 +30,101 @@ class RxJavaImageProcessor : ImageDownloader {
         onError: (Throwable) -> Unit
     ) {
         val startTime = System.nanoTime()
-
-        val disposable = Observable.fromIterable(imageUrls)
-            .flatMap({ url ->
+        val disposable = Observable.fromIterable(imageUrls.withIndex())
+            .flatMap({ (index, url) ->
                 Observable.fromCallable {
-                    Utils.downloadImageBlocking(url)
+                    try {
+                        val bitmap = Utils.downloadImageBlocking(url)
+                        DownloadResult.Success(bitmap)
+                    } catch (e: Exception) {
+                        DownloadResult.Failed
+                    }
                 }.subscribeOn(Schedulers.io())
+                    .doOnNext { result ->
+                        when (result) {
+                            is DownloadResult.Success -> onProgress(index, result.bitmap)
+                            is DownloadResult.Failed -> onProgress(index, null)
+                        }
+                    }.onErrorReturn { error ->
+                        DownloadResult.Failed
+                    }
             }, true, imageUrls.size)
             .toList()
             .observeOn(AndroidSchedulers.mainThread())
-            .subscribe({ bitmaps ->
+            .subscribe({ results ->
                 val endTime = System.nanoTime()
-                bitmaps.forEachIndexed { index, bitmap ->
-                    onProgress(index, bitmap)
-                }
+                val successfulDownloads = results.count { it is DownloadResult.Success }
                 onComplete((endTime - startTime) / 1_000_000)
             }, { error ->
+                if (error is CompositeException) {
+                    error.exceptions.forEachIndexed { i, e ->
+                        Log.e("RxJavaImageProcessor", "  Inner Exception ${i + 1}: ${e.message}", e)
+                    }
+                }
                 onError(error)
             })
-        // ВИПРАВЛЕННЯ: Додаємо Disposable вручну
+
         disposables.add(disposable)
     }
 
-    /**
-     * Паралельно обробляє (застосовує фільтр) одне зображення, розділяючи його на частини,
-     * використовуючи RxJava Schedulers.computation().
-     */
     override fun processSingleImageParallel(
         originalBitmap: Bitmap,
+        targetWidth: Int,
+        targetHeight: Int,
         onSuccess: (Bitmap, Long) -> Unit,
         onError: (Throwable) -> Unit
     ) {
-        val disposable = Observable.fromCallable {
+        val startTime = System.nanoTime()
+
+        val disposable = Single.fromCallable {
+            val resizedBitmap = Utils.resizeBitmap(originalBitmap, targetWidth, targetHeight)
             val originalWidth = originalBitmap.width
             val originalHeight = originalBitmap.height
             val parts = Utils.splitBitmap(originalBitmap, NUM_PROCESSING_PARTS)
 
-            // ВИПРАВЛЕННЯ: Явно зберігаємо результат time у змінній та finalBitmap
-            var finalBitmap: Bitmap? = null
-            val timeNanos = measureNanoTime {
-                val processedPartsObservable = Observable.fromIterable(parts)
-                    .flatMap({ (partBitmap, originalX) ->
-                        Observable.fromCallable {
-                            val processedPart = Utils.processBitmapPartBlocking(partBitmap)
-                            Pair(processedPart, originalX)
-                        }.subscribeOn(Schedulers.computation())
-                    }, true, NUM_PROCESSING_PARTS)
+            Log.d("RxJavaImageProcessor", "Starting processing of ${parts.size} parts")
 
-                val processedPartsList = processedPartsObservable.toList().blockingGet()
-
-                finalBitmap =
-                    Utils.combineBitmaps(originalWidth, originalHeight, processedPartsList)
+            val processedParts = parts.withIndex().map { (partIndex, partData) ->
+                val (partBitmap, originalX) = partData
+                Single.fromCallable {
+                    Log.d("RxJavaImageProcessor", "Processing part $partIndex")
+                    try {
+                        val processedPart = Utils.processBitmapPartBlocking(partBitmap)
+                        Pair(processedPart, originalX)
+                    } catch (e: Exception) {
+                        Log.e(
+                            "RxJavaImageProcessor",
+                            "Error processing part $partIndex: ${e.message}",
+                            e
+                        )
+                        throw e
+                    }
+                }.subscribeOn(Schedulers.computation())
             }
-            // ВИПРАВЛЕННЯ: Повертаємо Pair явно з timeNanos та finalBitmap
+
+            val results = Single.zip(processedParts) { resultsArray ->
+                resultsArray.map { it as Pair<Bitmap, Int> }
+            }.blockingGet()
+
+            val finalBitmap = Utils.combineBitmaps(originalWidth, originalHeight, results)
+            val timeNanos = System.nanoTime() - startTime
+
+            Log.d("RxJavaImageProcessor", "Successfully processed image")
             Pair(timeNanos, finalBitmap)
         }
             .subscribeOn(Schedulers.computation())
             .observeOn(AndroidSchedulers.mainThread())
-            // ВИПРАВЛЕННЯ: Явно вказуємо імена параметрів в лямбді subscribe
             .subscribe({ (timeNanos, finalBitmap) ->
                 onSuccess(finalBitmap, timeNanos / 1_000_000)
             }, { error ->
+                Log.e(
+                    "RxJavaImageProcessor",
+                    "Error in processSingleImageParallel: ${error.message}",
+                    error
+                )
                 onError(error)
             })
-        // ВИПРАВЛЕННЯ: Додаємо Disposable вручну
+
         disposables.add(disposable)
     }
 

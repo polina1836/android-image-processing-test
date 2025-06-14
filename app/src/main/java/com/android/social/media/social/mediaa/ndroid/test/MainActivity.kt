@@ -5,187 +5,377 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.android.social.media.social.mediaa.ndroid.test.data.CoroutinesImageProcessor
 import com.android.social.media.social.mediaa.ndroid.test.data.CoroutinesOkHttpImageProcessor
 import com.android.social.media.social.mediaa.ndroid.test.data.RxJavaImageProcessor
 import com.android.social.media.social.mediaa.ndroid.test.data.ThreadsImageProcessor
 import com.android.social.media.social.mediaa.ndroid.test.data.Utils
 import com.android.social.media.social.mediaa.ndroid.test.domain.repository.ImageDownloader
+import com.android.social.media.social.mediaa.ndroid.test.ui.ImageDetailScreen
+import com.android.social.media.social.mediaa.ndroid.test.ui.ScreenState
 import com.android.social.media.social.mediaa.ndroid.test.ui.theme.SocialMediaAndroidTestTheme
-import java.lang.Math.log
-
-const val NUMBER_OF_IMAGES = 100
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Ініціалізуємо Coil ImageLoader ОДИН РАЗ при старті додатку
-        // Це важливо для CoilImageProcessor
+        Utils.initializeOkHttpClient(applicationContext)
         Utils.initializeImageLoader(applicationContext)
 
         setContent {
-            SocialMediaAndroidTestTheme { // Застосовуємо вашу тему
+            SocialMediaAndroidTestTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AppContent() // Основний Composable для нашого додатка
+                    ImageDownloaderScreen()
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppContent() {
-    val context = LocalContext.current
+fun ImageDownloaderScreen() {
 
-    val coroutinesProcessor = remember { CoroutinesImageProcessor(context) }
+    var currentScreen: ScreenState by remember { mutableStateOf(ScreenState.ImageGrid) }
+
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+//    val imageProcessor: ImageDownloader = remember { CoroutinesOkHttpImageProcessor(context) }
+
     val coroutinesOkHttpProcessor = remember { CoroutinesOkHttpImageProcessor(context) }
     val rxJavaProcessor = remember { RxJavaImageProcessor() }
     val threadsProcessor = remember { ThreadsImageProcessor() }
 
-    // Змінні стану для відображення часу завантаження
-    var coroutinesCoilDownloadTime by remember { mutableStateOf("N/A") }
-    var coroutinesOkHttpDownloadTime by remember { mutableStateOf("N/A") }
-    var rxJavaDownloadTime by remember { mutableStateOf("N/A") }
-    var threadsDownloadTime by remember { mutableStateOf("N/A") }
-
-    // Змінні стану для відображення часу обробки
-    var coroutinesCoilProcessTime by remember { mutableStateOf("N/A") }
-    var coroutinesOkHttpProcessTime by remember { mutableStateOf("N/A") }
-    var rxJavaProcessTime by remember { mutableStateOf("N/A") }
-    var threadsProcessTime by remember { mutableStateOf("N/A") }
-
-    val imageUrls = remember {
-        (1..NUMBER_OF_IMAGES).map { id -> Utils.getImageUrl(id) }
-    }
+    val coroutinesOkHttpDownloadTime = remember { mutableStateOf("N/A") }
+    val rxJavaDownloadTime = remember { mutableStateOf("N/A") }
+    val threadsDownloadTime = remember { mutableStateOf("N/A") }
 
     val downloadedBitmaps = remember { mutableStateMapOf<Int, Bitmap?>() }
-    var currentImageProcessor by remember { mutableStateOf<ImageDownloader?>(null) }
-    var lastProcessedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var downloadTime by remember { mutableStateOf("N/A") }
+    var isDownloading by remember { mutableStateOf(false) }
+    var currentTestName by remember { mutableStateOf("") }
+    var selectedNumberOfImages by remember { mutableStateOf(100) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            "Завантаження 100 зображень (I/O Bound):",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
+    val imageUrls by remember(selectedNumberOfImages) {
+        mutableStateOf((1..selectedNumberOfImages).map { id -> Utils.getImageUrl(id) })
+    }
 
-        // Coroutines (OkHttp)
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Button(onClick = {
-                Log.i("Coroutines!!!", "--- Запускаємо тест завантаження: Coroutines (OkHttp) ---")
-                currentImageProcessor = coroutinesOkHttpProcessor // Встановлюємо активний процесор
-                coroutinesOkHttpProcessor.downloadImages(
-                    imageUrls = imageUrls,
-                    onProgress = { index, bitmap ->
-                        downloadedBitmaps[index] = bitmap
-                    },
-                    onComplete = { time ->
-                        coroutinesOkHttpDownloadTime = "${time}ms"
-                        Log.i("Coroutines!!!", "Coroutines (OkHttp) завершено за ${time}ms.")
-                    },
-                    onError = { error ->
-                        Log.i("Coroutines!!!", "Помилка Coroutines (OkHttp): ${error.message}")
-                    }
-                )
-            }) { Text("Coroutines (OkHttp)") }
-            Text("Час: $coroutinesOkHttpDownloadTime", style = MaterialTheme.typography.bodySmall)
-        }
+    val logger = remember { mutableStateListOf<String>() }
+    fun log(message: String) {
+        Log.d("ImageDownloaderScreen", message)
+        logger.add(0, message)
+        if (logger.size > 20) logger.removeAt(logger.size - 1)
+    }
 
-        Spacer(modifier = Modifier.height(8.dp))
+    when (val screen = currentScreen) {
+        ScreenState.ImageGrid -> {
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceAround,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Button(onClick = {
-                    Log.i("RX!!!", "--- Запускаємо тест завантаження: RxJava ---")
-                    currentImageProcessor = rxJavaProcessor // Встановлюємо активний процесор
-                    rxJavaProcessor.downloadImages(
-                        imageUrls = imageUrls,
-                        onProgress = { index, bitmap ->
-                            downloadedBitmaps[index] =
-                                bitmap // RxJava onProgress буде викликатися для кожного Bitmap
-                        },
-                        onComplete = { time ->
-                            rxJavaDownloadTime = "${time}ms"
-                            Log.i("RX!!!", "RxJava завершено за ${time}ms.")
-                        },
-                        onError = { error ->
-                            Log.i("RX!!!", "Помилка RxJava: ${error.message}")
+            DisposableEffect(Unit) {
+                onDispose {
+                    coroutinesOkHttpProcessor.cancelOperations()
+                    rxJavaProcessor.cancelOperations()
+                    threadsProcessor.cancelOperations()
+                    Log.d("ImageDownloaderScreen", "Всі операції завантаження скасовано.")
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+
+                val startDownloadTest: (ImageDownloader, String, MutableState<String>) -> Unit =
+                    { processor, name, timeState ->
+                        if (!isDownloading) {
+                            isDownloading = true
+                            currentTestName = name
+                            timeState.value = "Downloading..."
+                            downloadedBitmaps.clear()
+                            log("--- Starting download test: $name ---")
+
+                            coroutineScope.launch {
+                                processor.downloadImages(
+                                    imageUrls = (0 until selectedNumberOfImages).map { id ->
+                                        Utils.getImageUrl(
+                                            id + 1
+                                        )
+                                    },
+                                    onProgress = { index, bitmap ->
+                                        downloadedBitmaps[index] = bitmap
+                                    },
+                                    onComplete = { time ->
+                                        timeState.value = "${time}мс"
+                                        isDownloading = false
+                                        log("$name завершено за ${time}мс.")
+                                    },
+                                    onError = { error ->
+                                        timeState.value = "Помилка!"
+                                        isDownloading = false
+                                        log("Помилка в $name: ${error.localizedMessage ?: "Невідома помилка"}")
+                                    }
+                                )
+                            }
                         }
-                    )
-                }) { Text("RxJava") }
-                Text("Час: $rxJavaDownloadTime", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        // Java Threads
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Button(onClick = {
-                Log.i("THREADS!!!", "--- Запускаємо тест завантаження: Java Threads ---")
-                currentImageProcessor = threadsProcessor // Встановлюємо активний процесор
-                threadsProcessor.downloadImages(
-                    imageUrls = imageUrls,
-                    onProgress = { index, bitmap ->
-                        downloadedBitmaps[index] = bitmap
-                    },
-                    onComplete = { time ->
-                        threadsDownloadTime = "${time}ms"
-                        Log.i("THREADS!!!", "Java Threads завершено за ${time}ms.")
-                    },
-                    onError = { error ->
-                        Log.i("THREADS!!!", "Помилка Java Threads: ${error.message}")
                     }
+
+                Text(
+                    "Select image count:",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
-            }) { Text("Java Threads") }
-            Text("Час: $threadsDownloadTime", style = MaterialTheme.typography.bodySmall)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = { selectedNumberOfImages = 100 },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (selectedNumberOfImages == 100) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                        ),
+                        enabled = !isDownloading
+                    ) { Text("100") }
+                    Button(
+                        onClick = { selectedNumberOfImages = 500 },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (selectedNumberOfImages == 500) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                        ),
+                        enabled = !isDownloading
+                    ) { Text("500") }
+                    Button(
+                        onClick = { selectedNumberOfImages = 1000 },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (selectedNumberOfImages == 1000) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                        ),
+                        enabled = !isDownloading
+                    ) { Text("1000") }
+                }
+
+                Text(
+                    "Download 100 Images:",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Button(
+                            onClick = {
+                                startDownloadTest(
+                                    coroutinesOkHttpProcessor,
+                                    "Coroutines (OkHttp)",
+                                    coroutinesOkHttpDownloadTime
+                                )
+                            },
+                            enabled = !isDownloading
+                        ) { Text("Coroutines (OkHttp)") }
+                        Text(
+                            "Time: ${coroutinesOkHttpDownloadTime.value}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Button(
+                            onClick = {
+                                startDownloadTest(
+                                    rxJavaProcessor,
+                                    "RxJava",
+                                    rxJavaDownloadTime
+                                )
+                            },
+                            enabled = !isDownloading
+                        ) { Text("RxJava") }
+                        Text(
+                            "Time: ${rxJavaDownloadTime.value}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Button(
+                            onClick = {
+                                startDownloadTest(
+                                    threadsProcessor,
+                                    "Java Threads",
+                                    threadsDownloadTime
+                                )
+                            },
+                            enabled = !isDownloading
+                        ) { Text("Java Threads") }
+                        Text(
+                            "Time: ${threadsDownloadTime.value}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                if (isDownloading) {
+                    val progress =
+                        downloadedBitmaps.size.toFloat() / selectedNumberOfImages.toFloat()
+                    LinearProgressIndicator(
+                        progress = progress,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Downloading ($currentTestName): ${downloadedBitmaps.size}/${selectedNumberOfImages}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                } else if (downloadedBitmaps.isNotEmpty()) {
+                    Text(
+                        "Download completed ($currentTestName)",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                } else {
+                    Text(
+                        "Press a button to start downloading images.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                Text("Logs:", style = MaterialTheme.typography.titleSmall)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(100.dp)
+                        .background(Color.LightGray.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    logger.forEach { message ->
+                        Text(message, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(4),
+                    contentPadding = PaddingValues(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    itemsIndexed(List(selectedNumberOfImages) { it }) { index, _ ->
+                        val bitmap = downloadedBitmaps[index]
+                        ImageItem(bitmap = bitmap, index = index, onClick = { clickedBitmap ->
+                            if (clickedBitmap != null) {
+                                currentScreen = ScreenState.ImageDetail(index, clickedBitmap)
+                            }
+                        })
+                    }
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-
-        DisposableEffect(Unit) {
-            onDispose {
-                coroutinesProcessor.cancelOperations()
-                coroutinesOkHttpProcessor.cancelOperations()
-                rxJavaProcessor.cancelOperations()
-                threadsProcessor.cancelOperations()
-                Log.i("Cancellation State: ", "All coroutines are cancelled")
-            }
+        is ScreenState.ImageDetail -> {
+            ImageDetailScreen(
+                initialBitmap = screen.bitmap,
+                onBack = {
+                    currentScreen = ScreenState.ImageGrid
+                },
+                coroutinesProcessor = coroutinesOkHttpProcessor,
+                rxJavaProcessor = rxJavaProcessor,
+                threadsProcessor = threadsProcessor,
+            )
         }
     }
 }
 
+@Composable
+fun ImageItem(bitmap: Bitmap?, index: Int, onClick: (Bitmap?) -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(80.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.LightGray)
+            .clickable(onClick = { onClick(bitmap) }),
+        contentAlignment = Alignment.Center
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = "Image ${index + 1}",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(color = Color.LightGray)
+            )
+        }
+    }
+}

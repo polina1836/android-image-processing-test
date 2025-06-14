@@ -17,17 +17,10 @@ import kotlin.system.measureNanoTime
 class CoroutinesOkHttpImageProcessor(private val context: Context) : ImageDownloader {
     private val job = SupervisorJob()
 
-    // Використовуємо Dispatchers.IO для мережевих операцій (блокуючих)
-    // та Dispatchers.Default для CPU-інтенсивної обробки.
-    private val scope = CoroutineScope(Dispatchers.IO + job) // Основний скоуп для завантаження
+    private val scope = CoroutineScope(Dispatchers.IO + job)
 
-    // Кількість частин для паралельної обробки зображення (CPU-інтенсивна частина)
     private val NUM_PROCESSING_PARTS = Runtime.getRuntime().availableProcessors()
 
-    /**
-     * Паралельно завантажує список зображень, використовуючи OkHttp (блокуючі виклики,
-     * обгорнуті в корутини на Dispatchers.IO).
-     */
     override fun downloadImages(
         imageUrls: List<String>,
         onProgress: (Int, Bitmap?) -> Unit,
@@ -40,12 +33,11 @@ class CoroutinesOkHttpImageProcessor(private val context: Context) : ImageDownlo
 
             imageUrls.forEachIndexed { index, url ->
                 deferredBitmaps.add(
-                    async(Dispatchers.IO) { // КОЖНЕ завантаження запускається паралельно на Dispatchers.IO
+                    async(Dispatchers.IO) {
                         try {
-                            // !!! Тут використовуємо БЛОКУЮЧУ функцію OkHttp, але виконуємо її на фоновому потоці Dispatchers.IO !!!
                             val bitmap = Utils.downloadImageBlocking(url)
                             withContext(Dispatchers.Main) {
-                                onProgress(index, bitmap) // Повідомляємо про прогрес
+                                onProgress(index, bitmap)
                             }
                             bitmap
                         } catch (e: Exception) {
@@ -53,8 +45,8 @@ class CoroutinesOkHttpImageProcessor(private val context: Context) : ImageDownlo
                                 onProgress(
                                     index,
                                     null
-                                ) // Повідомляємо, що це зображення не завантажилося
-                                onError(e) // Повідомляємо про помилку
+                                )
+                                onError(e)
                             }
                             null
                         }
@@ -62,7 +54,6 @@ class CoroutinesOkHttpImageProcessor(private val context: Context) : ImageDownlo
                 )
             }
 
-            // `awaitAll()` чекає на завершення всіх паралельних завантажень
             deferredBitmaps.awaitAll()
             val endTime = System.nanoTime()
             withContext(Dispatchers.Main) {
@@ -73,45 +64,35 @@ class CoroutinesOkHttpImageProcessor(private val context: Context) : ImageDownlo
 
     override fun processSingleImageParallel(
         originalBitmap: Bitmap,
+        targetWidth: Int,
+        targetHeight: Int,
         onSuccess: (Bitmap, Long) -> Unit,
         onError: (Throwable) -> Unit
     ) {
         scope.launch {
             try {
-                // Оголошуємо змінну 'finalBitmap' та 'time' тут,
-                // щоб вони були доступні для withContext(Dispatchers.Main)
                 val finalBitmap: Bitmap
-                val timeMs: Long // Змінимо назву на timeMs, щоб було зрозуміліше, що це мілісекунди
-
-                // Весь блок, який ми хочемо виміряти, обгортаємо measureNanoTime
-                // і результат зберігаємо у змінній timeMs
+                val timeMs: Long
                 timeMs = measureNanoTime {
-                    // Розділяємо зображення на частини
+                    val resizedBitmap = Utils.resizeBitmap(originalBitmap, targetWidth, targetHeight)
                     val parts = Utils.splitBitmap(originalBitmap, NUM_PROCESSING_PARTS)
                     val originalWidth = originalBitmap.width
                     val originalHeight = originalBitmap.height
 
-                    // Паралельна обробка кожної частини
                     val processedPartsWithCoords = mutableListOf<Deferred<Pair<Bitmap, Int>>>()
                     parts.forEach { (partBitmap, originalX) ->
                         processedPartsWithCoords.add(
                             async(Dispatchers.Default) { // Кожна частина обробляється на Dispatchers.Default (для CPU)
-                                val processedPart = Utils.processBitmapPartCoroutines(partBitmap)
+                                val processedPart = Utils.processBitmapPartBlocking(partBitmap)
                                 Pair(processedPart, originalX)
                             }
                         )
                     }
-
-                    // Чекаємо завершення всіх паралельних обробок
                     val results = processedPartsWithCoords.awaitAll()
-
-                    // Збираємо оброблені частини назад
                     finalBitmap = Utils.combineBitmaps(originalWidth, originalHeight, results)
-                } // measureNanoTime завершується тут, і його результат зберігається в timeMs
-
-                // Тепер finalBitmap та timeMs доступні для використання
+                }
                 withContext(Dispatchers.Main) {
-                    onSuccess(finalBitmap, timeMs / 1_000_000) // Використовуємо timeMs
+                    onSuccess(finalBitmap, timeMs / 1_000_000)
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
