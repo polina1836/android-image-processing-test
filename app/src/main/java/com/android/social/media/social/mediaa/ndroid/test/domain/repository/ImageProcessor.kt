@@ -2,7 +2,7 @@ package com.android.social.media.social.mediaa.ndroid.test.domain.repository
 
 import android.graphics.Bitmap
 
-interface ImageDownloader {
+interface ImageProcessor {
     fun downloadImages(
         imageUrls: List<String>,
         onProgress: (Int, Bitmap?) -> Unit,

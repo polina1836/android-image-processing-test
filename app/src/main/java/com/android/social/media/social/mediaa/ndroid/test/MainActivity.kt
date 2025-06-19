@@ -54,7 +54,7 @@ import com.android.social.media.social.mediaa.ndroid.test.data.CoroutinesOkHttpI
 import com.android.social.media.social.mediaa.ndroid.test.data.RxJavaImageProcessor
 import com.android.social.media.social.mediaa.ndroid.test.data.ThreadsImageProcessor
 import com.android.social.media.social.mediaa.ndroid.test.data.Utils
-import com.android.social.media.social.mediaa.ndroid.test.domain.repository.ImageDownloader
+import com.android.social.media.social.mediaa.ndroid.test.domain.repository.ImageProcessor
 import com.android.social.media.social.mediaa.ndroid.test.ui.ImageDetailScreen
 import com.android.social.media.social.mediaa.ndroid.test.ui.ScreenState
 import com.android.social.media.social.mediaa.ndroid.test.ui.theme.SocialMediaAndroidTestTheme
@@ -72,6 +72,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
+
                     ImageDownloaderScreen()
                 }
             }
@@ -84,12 +85,8 @@ class MainActivity : ComponentActivity() {
 fun ImageDownloaderScreen() {
 
     var currentScreen: ScreenState by remember { mutableStateOf(ScreenState.ImageGrid) }
-
-    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-//    val imageProcessor: ImageDownloader = remember { CoroutinesOkHttpImageProcessor(context) }
-
-    val coroutinesOkHttpProcessor = remember { CoroutinesOkHttpImageProcessor(context) }
+    val coroutinesOkHttpProcessor = remember { CoroutinesOkHttpImageProcessor() }
     val rxJavaProcessor = remember { RxJavaImageProcessor() }
     val threadsProcessor = remember { ThreadsImageProcessor() }
 
@@ -102,10 +99,6 @@ fun ImageDownloaderScreen() {
     var isDownloading by remember { mutableStateOf(false) }
     var currentTestName by remember { mutableStateOf("") }
     var selectedNumberOfImages by remember { mutableStateOf(100) }
-
-    val imageUrls by remember(selectedNumberOfImages) {
-        mutableStateOf((1..selectedNumberOfImages).map { id -> Utils.getImageUrl(id) })
-    }
 
     val logger = remember { mutableStateListOf<String>() }
     fun log(message: String) {
@@ -133,7 +126,7 @@ fun ImageDownloaderScreen() {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
 
-                val startDownloadTest: (ImageDownloader, String, MutableState<String>) -> Unit =
+                val startDownloadTest: (ImageProcessor, String, MutableState<String>) -> Unit =
                     { processor, name, timeState ->
                         if (!isDownloading) {
                             isDownloading = true
@@ -303,22 +296,6 @@ fun ImageDownloaderScreen() {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
-
-                Text("Logs:", style = MaterialTheme.typography.titleSmall)
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(100.dp)
-                        .background(Color.LightGray.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
-                        .padding(8.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    logger.forEach { message ->
-                        Text(message, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
 
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(4),

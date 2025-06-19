@@ -3,16 +3,15 @@ package com.android.social.media.social.mediaa.ndroid.test.data
 import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
-import com.android.social.media.social.mediaa.ndroid.test.domain.repository.ImageDownloader
+import com.android.social.media.social.mediaa.ndroid.test.domain.repository.ImageProcessor
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import kotlin.system.measureNanoTime
 
-class ThreadsImageProcessor : ImageDownloader {
-    private val executorService: ExecutorService =
-        Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
+class ThreadsImageProcessor : ImageProcessor {
+    private val executorService: ExecutorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
 
     private val uiHandler = Handler(Looper.getMainLooper())
 
@@ -80,9 +79,9 @@ class ThreadsImageProcessor : ImageDownloader {
                 timeMs = measureNanoTime {
                     val resizedBitmap =
                         Utils.resizeBitmap(originalBitmap, targetWidth, targetHeight)
-                    val originalWidth = originalBitmap.width
-                    val originalHeight = originalBitmap.height
-                    val parts = Utils.splitBitmap(originalBitmap, NUM_PROCESSING_PARTS)
+                    val resizedWidth = resizedBitmap.width
+                    val resizedHeight = resizedBitmap.height
+                    val parts = Utils.splitBitmap(resizedBitmap, NUM_PROCESSING_PARTS)
 
                     val processedPartsWithCoords = mutableListOf<Pair<Bitmap, Int>>()
                     val latch = CountDownLatch(parts.size)
@@ -106,8 +105,8 @@ class ThreadsImageProcessor : ImageDownloader {
                     latch.await()
 
                     finalBitmap = Utils.combineBitmaps(
-                        originalWidth,
-                        originalHeight,
+                        resizedWidth,
+                        resizedHeight,
                         processedPartsWithCoords
                     )
                 }

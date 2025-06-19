@@ -2,7 +2,7 @@ package com.android.social.media.social.mediaa.ndroid.test.data
 
 import android.graphics.Bitmap
 import android.util.Log
-import com.android.social.media.social.mediaa.ndroid.test.domain.repository.ImageDownloader
+import com.android.social.media.social.mediaa.ndroid.test.domain.repository.ImageProcessor
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
 import io.reactivex.rxjava3.core.Observable
 import io.reactivex.rxjava3.core.Single
@@ -15,9 +15,7 @@ sealed class DownloadResult {
     object Failed : DownloadResult()
 }
 
-data class ProcessingResult(val bitmap: Bitmap?, val originalX: Int)
-
-class RxJavaImageProcessor : ImageDownloader {
+class RxJavaImageProcessor : ImageProcessor {
 
     private val disposables = CompositeDisposable()
 
@@ -77,42 +75,44 @@ class RxJavaImageProcessor : ImageDownloader {
         val startTime = System.nanoTime()
 
         val disposable = Single.fromCallable {
-            val resizedBitmap = Utils.resizeBitmap(originalBitmap, targetWidth, targetHeight)
             val originalWidth = originalBitmap.width
             val originalHeight = originalBitmap.height
             val parts = Utils.splitBitmap(originalBitmap, NUM_PROCESSING_PARTS)
 
             Log.d("RxJavaImageProcessor", "Starting processing of ${parts.size} parts")
 
-            val processedParts = parts.withIndex().map { (partIndex, partData) ->
-                val (partBitmap, originalX) = partData
-                Single.fromCallable {
-                    Log.d("RxJavaImageProcessor", "Processing part $partIndex")
-                    try {
-                        val processedPart = Utils.processBitmapPartBlocking(partBitmap)
-                        Pair(processedPart, originalX)
-                    } catch (e: Exception) {
-                        Log.e(
-                            "RxJavaImageProcessor",
-                            "Error processing part $partIndex: ${e.message}",
-                            e
-                        )
-                        throw e
-                    }
-                }.subscribeOn(Schedulers.computation())
-            }
-
-            val results = Single.zip(processedParts) { resultsArray ->
-                resultsArray.map { it as Pair<Bitmap, Int> }
-            }.blockingGet()
-
-            val finalBitmap = Utils.combineBitmaps(originalWidth, originalHeight, results)
-            val timeNanos = System.nanoTime() - startTime
-
-            Log.d("RxJavaImageProcessor", "Successfully processed image")
-            Pair(timeNanos, finalBitmap)
+            Triple(originalWidth, originalHeight, parts)
         }
-            .subscribeOn(Schedulers.computation())
+            .subscribeOn(Schedulers.io())
+            .flatMap { (originalWidth, originalHeight, parts) ->
+
+                val processedParts = parts.withIndex().map { (partIndex, partData) ->
+                    val (partBitmap, originalX) = partData
+                    Single.fromCallable {
+                        Log.d("RxJavaImageProcessor", "Processing part $partIndex")
+                        try {
+                            val processedPart = Utils.processBitmapPartBlocking(partBitmap)
+                            Pair(processedPart, originalX)
+                        } catch (e: Exception) {
+                            Log.e(
+                                "RxJavaImageProcessor",
+                                "Error processing part $partIndex: ${e.message}",
+                                e
+                            )
+                            throw e
+                        }
+                    }.subscribeOn(Schedulers.computation())
+                }
+
+                Single.zip(processedParts) { resultsArray ->
+                    val results = resultsArray.map { it as Pair<Bitmap, Int> }
+                    val finalBitmap = Utils.combineBitmaps(originalWidth, originalHeight, results)
+                    val timeNanos = System.nanoTime() - startTime
+
+                    Log.d("RxJavaImageProcessor", "Successfully processed image")
+                    Pair(timeNanos, finalBitmap)
+                }
+            }
             .observeOn(AndroidSchedulers.mainThread())
             .subscribe({ (timeNanos, finalBitmap) ->
                 onSuccess(finalBitmap, timeNanos / 1_000_000)
@@ -124,7 +124,6 @@ class RxJavaImageProcessor : ImageDownloader {
                 )
                 onError(error)
             })
-
         disposables.add(disposable)
     }
 

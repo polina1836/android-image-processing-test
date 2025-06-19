@@ -1,8 +1,7 @@
 package com.android.social.media.social.mediaa.ndroid.test.data
 
-import android.content.Context
 import android.graphics.Bitmap
-import com.android.social.media.social.mediaa.ndroid.test.domain.repository.ImageDownloader
+import com.android.social.media.social.mediaa.ndroid.test.domain.repository.ImageProcessor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -14,7 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.system.measureNanoTime
 
-class CoroutinesOkHttpImageProcessor(private val context: Context) : ImageDownloader {
+class CoroutinesOkHttpImageProcessor() : ImageProcessor {
     private val job = SupervisorJob()
 
     private val scope = CoroutineScope(Dispatchers.IO + job)
@@ -57,7 +56,7 @@ class CoroutinesOkHttpImageProcessor(private val context: Context) : ImageDownlo
             deferredBitmaps.awaitAll()
             val endTime = System.nanoTime()
             withContext(Dispatchers.Main) {
-                onComplete((endTime - startTime) / 1_000_000) // Повідомляємо про загальний час
+                onComplete((endTime - startTime) / 1_000_000)
             }
         }
     }
